@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "BaillConnect Login",
+        "description": "Enter your baillconnect.com portal credentials",
+        "data": {
+          "email": "Email address",
+          "password": "Password"
+        }
+      },
+      "regulation": {
+        "title": "Regulation ID",
+        "description": "Your installation ID could not be detected automatically. You can find it in the portal URL (e.g. /regulations/**123**). [Help]({help_url})",
+        "data": {
+          "regulation_id": "Regulation ID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the BaillConnect server. Check your internet connection.",
+      "invalid_auth": "Invalid credentials. Check your email and password.",
+      "unknown": "An unknown error occurred."
+    },
+    "abort": {
+      "already_configured": "This BaillConnect installation is already configured."
+    }
+  }
+}

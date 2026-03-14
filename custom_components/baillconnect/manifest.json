@@ -1,0 +1,12 @@
+{
+  "domain": "baillconnect",
+  "name": "BaillConnect",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/jocelynlopez/baillconnect-ha",
+  "issue_tracker": "https://github.com/jocelynlopez/baillconnect-ha/issues",
+  "dependencies": [],
+  "codeowners": ["@jocelynlopez"],
+  "requirements": ["aiohttp>=3.8.0", "beautifulsoup4>=4.11.0"],
+  "iot_class": "cloud_polling"
+}

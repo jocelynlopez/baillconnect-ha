@@ -1,0 +1,29 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connexion BaillConnect",
+        "description": "Entrez vos identifiants du portail baillconnect.com",
+        "data": {
+          "email": "Adresse e-mail",
+          "password": "Mot de passe"
+        }
+      },
+      "regulation": {
+        "title": "Identifiant de régulation",
+        "description": "L'identifiant de votre installation n'a pas pu être détecté automatiquement. Vous pouvez le trouver dans l'URL du portail (ex: /regulations/**123**). [Aide]({help_url})",
+        "data": {
+          "regulation_id": "ID de régulation"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter au serveur BaillConnect. Vérifiez votre connexion Internet.",
+      "invalid_auth": "Identifiants invalides. Vérifiez votre e-mail et mot de passe.",
+      "unknown": "Une erreur inconnue est survenue."
+    },
+    "abort": {
+      "already_configured": "Cette installation BaillConnect est déjà configurée."
+    }
+  }
+}
