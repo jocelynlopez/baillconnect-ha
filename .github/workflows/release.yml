@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from manifest.json
+        id: manifest
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('custom_components/baillconnect/manifest.json'))['version'])")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Verify tag matches manifest version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST_VERSION="${{ steps.manifest.outputs.version }}"
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match manifest version $MANIFEST_VERSION"
+            exit 1
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.manifest.outputs.version }}"
+          generate_release_notes: true
+          make_latest: true
