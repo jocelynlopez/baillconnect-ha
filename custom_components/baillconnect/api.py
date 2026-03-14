@@ -241,24 +241,51 @@ class BaillConnectClient:
             async with session.post(
                 LOGIN_URL,
                 data=payload,
-                allow_redirects=True,
+                allow_redirects=False,   # 302 redirect = login success
                 timeout=REQUEST_TIMEOUT,
             ) as resp:
+                _LOGGER.debug(
+                    "Login POST status=%s Location=%s",
+                    resp.status,
+                    resp.headers.get("Location", "-"),
+                )
+                # 302/303 = redirect after successful login (standard Laravel behaviour)
+                # 200 = login page re-rendered (credentials wrong or CSRF mismatch)
                 if resp.status in (401, 403):
                     raise BaillConnectAuthError("Invalid credentials")
-                if resp.status != 200:
-                    raise BaillConnectConnectionError(
-                        f"Login returned HTTP {resp.status}"
+                if resp.status == 200:
+                    # Server returned the login form again → bad credentials
+                    raise BaillConnectAuthError(
+                        "Login returned 200 (credentials rejected or CSRF mismatch)"
                     )
-                # Refresh CSRF after login (new token in the new page)
-                html = await resp.text()
-                soup = BeautifulSoup(html, "html.parser")
-                meta = soup.find("meta", attrs={"name": "csrf-token"})
-                if meta and meta.get("content"):
-                    self._csrf_token = str(meta["content"])
+                if resp.status not in (301, 302, 303, 307, 308):
+                    raise BaillConnectConnectionError(
+                        f"Unexpected login response HTTP {resp.status}"
+                    )
+                # Successful redirect — follow it once to grab a fresh CSRF token
+                location = resp.headers.get("Location")
 
         except aiohttp.ClientError as exc:
             raise BaillConnectConnectionError(f"Network error during login: {exc}") from exc
+
+        # Follow the redirect manually to refresh the CSRF token for API calls
+        if location:
+            redirect_url = location if location.startswith("http") else f"{BASE_URL}{location}"
+            try:
+                async with session.get(
+                    redirect_url,
+                    allow_redirects=True,
+                    timeout=REQUEST_TIMEOUT,
+                ) as resp2:
+                    if resp2.status == 200:
+                        html = await resp2.text()
+                        soup = BeautifulSoup(html, "html.parser")
+                        meta = soup.find("meta", attrs={"name": "csrf-token"})
+                        if meta and meta.get("content"):
+                            self._csrf_token = str(meta["content"])
+                            _LOGGER.debug("CSRF token refreshed after login")
+            except aiohttp.ClientError:
+                pass  # Non-fatal — CSRF token from initial fetch is still valid
 
         _LOGGER.info("BaillConnect login successful for %s", self._email)
         return True
