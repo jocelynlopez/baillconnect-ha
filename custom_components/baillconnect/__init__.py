@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+import aiohttp
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant
@@ -23,14 +25,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     password: str = entry.data[CONF_PASSWORD]
     regulation_id: int = entry.data[CONF_REGULATION_ID]
 
-    client = BaillConnectClient(email, password)
+    # Dedicated session with its own cookie jar (required for auth cookies)
+    session = aiohttp.ClientSession()
+    client = BaillConnectClient(email, password, session=session)
 
     try:
         await client.login()
     except BaillConnectAuthError as exc:
+        await session.close()
         raise ConfigEntryAuthFailed(f"Invalid credentials: {exc}") from exc
     except BaillConnectConnectionError as exc:
+        await session.close()
         raise ConfigEntryNotReady(f"Cannot connect: {exc}") from exc
+    except Exception as exc:
+        await session.close()
+        raise ConfigEntryNotReady(f"Unexpected error: {exc}") from exc
 
     coordinator = BaillConnectCoordinator(hass, client, regulation_id)
     await coordinator.async_config_entry_first_refresh()

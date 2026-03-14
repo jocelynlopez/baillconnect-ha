@@ -144,13 +144,22 @@ class RegulationState:
 # API Client
 # ---------------------------------------------------------------------------
 
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
+
+
 class BaillConnectClient:
     """Async HTTP client for the BaillConnect cloud API."""
 
-    def __init__(self, email: str, password: str) -> None:
+    def __init__(
+        self,
+        email: str,
+        password: str,
+        session: aiohttp.ClientSession | None = None,
+    ) -> None:
         self._email = email
         self._password = password
-        self._session: aiohttp.ClientSession | None = None
+        self._external_session = session is not None
+        self._session: aiohttp.ClientSession | None = session
         self._csrf_token: str | None = None
 
     # ------------------------------------------------------------------
@@ -160,11 +169,12 @@ class BaillConnectClient:
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
+            self._external_session = False
         return self._session
 
     async def close(self) -> None:
-        """Close the underlying aiohttp session."""
-        if self._session and not self._session.closed:
+        """Close the underlying aiohttp session (only if we own it)."""
+        if not self._external_session and self._session and not self._session.closed:
             await self._session.close()
 
     # ------------------------------------------------------------------
@@ -175,7 +185,9 @@ class BaillConnectClient:
         """Fetch CSRF token from the homepage meta tag."""
         session = self._ensure_session()
         try:
-            async with session.get(BASE_URL, allow_redirects=True) as resp:
+            async with session.get(
+                BASE_URL, allow_redirects=True, timeout=REQUEST_TIMEOUT
+            ) as resp:
                 if resp.status != 200:
                     raise BaillConnectConnectionError(
                         f"Homepage returned HTTP {resp.status}"
@@ -230,6 +242,7 @@ class BaillConnectClient:
                 LOGIN_URL,
                 data=payload,
                 allow_redirects=True,
+                timeout=REQUEST_TIMEOUT,
             ) as resp:
                 if resp.status in (401, 403):
                     raise BaillConnectAuthError("Invalid credentials")
@@ -300,6 +313,7 @@ class BaillConnectClient:
                     url,
                     json=body,
                     headers=self._api_headers(),
+                    timeout=REQUEST_TIMEOUT,
                 ) as resp:
                     if resp.status in (401, 403):
                         if attempt == 0:

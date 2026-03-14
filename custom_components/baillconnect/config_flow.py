@@ -8,6 +8,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import BaillConnectAuthError, BaillConnectClient, BaillConnectConnectionError
 from .const import CONF_REGULATION_ID, DOMAIN
@@ -38,6 +39,11 @@ class BaillConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         self._password: str = ""
         self._client: BaillConnectClient | None = None
 
+    def _make_client(self) -> BaillConnectClient:
+        """Create a client using the HA shared session (no leak risk)."""
+        session = async_get_clientsession(self.hass)
+        return BaillConnectClient(self._email, self._password, session=session)
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -48,15 +54,17 @@ class BaillConnectConfigFlow(ConfigFlow, domain=DOMAIN):
             self._email = user_input[CONF_EMAIL]
             self._password = user_input[CONF_PASSWORD]
 
-            client = BaillConnectClient(self._email, self._password)
+            client = self._make_client()
             try:
                 await client.login()
             except BaillConnectAuthError:
+                _LOGGER.warning("BaillConnect login failed: invalid credentials")
                 errors["base"] = "invalid_auth"
-            except BaillConnectConnectionError:
+            except BaillConnectConnectionError as exc:
+                _LOGGER.warning("BaillConnect connection error: %s", exc)
                 errors["base"] = "cannot_connect"
             except Exception:  # noqa: BLE001
-                _LOGGER.exception("Unexpected error during login")
+                _LOGGER.exception("Unexpected error during BaillConnect login")
                 errors["base"] = "unknown"
             else:
                 self._client = client
@@ -95,30 +103,31 @@ class BaillConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             regulation_id: int = user_input[CONF_REGULATION_ID]
 
-            # Validate by fetching state
-            if self._client is not None:
-                try:
-                    await self._client.get_state(regulation_id)
-                except BaillConnectAuthError:
-                    errors["base"] = "invalid_auth"
-                except BaillConnectConnectionError:
-                    errors["base"] = "cannot_connect"
-                except Exception:  # noqa: BLE001
-                    _LOGGER.exception("Unexpected error validating regulation ID")
-                    errors["base"] = "unknown"
-                else:
-                    await self.async_set_unique_id(
-                        f"{DOMAIN}_{self._email}_{regulation_id}"
-                    )
-                    self._abort_if_unique_id_configured()
-                    return self.async_create_entry(
-                        title=f"BaillConnect ({self._email})",
-                        data={
-                            CONF_EMAIL: self._email,
-                            CONF_PASSWORD: self._password,
-                            CONF_REGULATION_ID: regulation_id,
-                        },
-                    )
+            client = self._client or self._make_client()
+            try:
+                await client.get_state(regulation_id)
+            except BaillConnectAuthError:
+                _LOGGER.warning("BaillConnect auth error validating regulation ID")
+                errors["base"] = "invalid_auth"
+            except BaillConnectConnectionError as exc:
+                _LOGGER.warning("BaillConnect connection error: %s", exc)
+                errors["base"] = "cannot_connect"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected error validating regulation ID")
+                errors["base"] = "unknown"
+            else:
+                await self.async_set_unique_id(
+                    f"{DOMAIN}_{self._email}_{regulation_id}"
+                )
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=f"BaillConnect ({self._email})",
+                    data={
+                        CONF_EMAIL: self._email,
+                        CONF_PASSWORD: self._password,
+                        CONF_REGULATION_ID: regulation_id,
+                    },
+                )
 
         return self.async_show_form(
             step_id="regulation",
