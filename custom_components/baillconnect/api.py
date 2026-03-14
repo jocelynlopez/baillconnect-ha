@@ -182,15 +182,16 @@ class BaillConnectClient:
     # ------------------------------------------------------------------
 
     async def _fetch_csrf_token(self) -> str:
-        """Fetch CSRF token from the homepage meta tag."""
+        """Fetch CSRF token from the login page (GET /login)."""
         session = self._ensure_session()
         try:
             async with session.get(
-                BASE_URL, allow_redirects=True, timeout=REQUEST_TIMEOUT
+                LOGIN_URL, allow_redirects=True, timeout=REQUEST_TIMEOUT
             ) as resp:
+                _LOGGER.debug("GET %s -> HTTP %s", LOGIN_URL, resp.status)
                 if resp.status != 200:
                     raise BaillConnectConnectionError(
-                        f"Homepage returned HTTP {resp.status}"
+                        f"Login page returned HTTP {resp.status}"
                     )
                 html = await resp.text()
         except aiohttp.ClientError as exc:
