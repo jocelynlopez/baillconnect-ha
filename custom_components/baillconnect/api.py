@@ -146,6 +146,17 @@ class RegulationState:
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
+# Mimic a real browser to avoid 404/403 from basic bot-protection
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+}
+
 
 class BaillConnectClient:
     """Async HTTP client for the BaillConnect cloud API."""
@@ -182,16 +193,19 @@ class BaillConnectClient:
     # ------------------------------------------------------------------
 
     async def _fetch_csrf_token(self) -> str:
-        """Fetch CSRF token from the login page (GET /login)."""
+        """Fetch CSRF token from the homepage (GET /)."""
         session = self._ensure_session()
         try:
             async with session.get(
-                LOGIN_URL, allow_redirects=True, timeout=REQUEST_TIMEOUT
+                BASE_URL,
+                allow_redirects=True,
+                timeout=REQUEST_TIMEOUT,
+                headers=BROWSER_HEADERS,
             ) as resp:
-                _LOGGER.debug("GET %s -> HTTP %s", LOGIN_URL, resp.status)
+                _LOGGER.debug("GET %s -> HTTP %s", BASE_URL, resp.status)
                 if resp.status != 200:
                     raise BaillConnectConnectionError(
-                        f"Login page returned HTTP {resp.status}"
+                        f"Homepage returned HTTP {resp.status}"
                     )
                 html = await resp.text()
         except aiohttp.ClientError as exc:
@@ -244,6 +258,12 @@ class BaillConnectClient:
                 data=payload,
                 allow_redirects=False,   # 302 redirect = login success
                 timeout=REQUEST_TIMEOUT,
+                headers={
+                    **BROWSER_HEADERS,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Referer": LOGIN_URL,
+                    "Origin": BASE_URL,
+                },
             ) as resp:
                 _LOGGER.debug(
                     "Login POST status=%s Location=%s",
