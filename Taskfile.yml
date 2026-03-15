@@ -1,0 +1,45 @@
+version: '3'
+
+vars:
+  # Home Assistant requires Python 3.12+
+  PYTHON_VERSION: "3.12"
+
+tasks:
+
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # ── Environment ─────────────────────────────────────────────────────────────
+
+  setup:
+    desc: Create .venv with uv (Python {{.PYTHON_VERSION}}) and install dev dependencies
+    cmds:
+      - uv venv --python {{.PYTHON_VERSION}}
+      - uv pip install -r requirements-dev.txt
+    generates:
+      - .venv/**
+
+  # ── Tests ───────────────────────────────────────────────────────────────────
+
+  test:
+    desc: Run unit tests with pytest
+    cmds:
+      - uv run pytest tests/ -v
+
+  test-api:
+    desc: Run real API diagnostic (requires .env with credentials)
+    cmds:
+      - uv run python scripts/test_api.py
+
+  # ── Release ─────────────────────────────────────────────────────────────────
+
+  release:
+    desc: "Bump version, commit, tag and push. Usage: task release -- 1.2.0"
+    cmds:
+      - cmd: powershell -ExecutionPolicy Bypass -File scripts\release.ps1 {{.CLI_ARGS}}
+        platforms: [windows]
+      - cmd: bash scripts/release.sh {{.CLI_ARGS}}
+        platforms: [linux, darwin]
