@@ -1,7 +1,7 @@
 {
     "domain":  "baillconnect",
     "name":  "BaillConnect",
-    "version":  "1.0.3",
+    "version":  "1.0.4",
     "config_flow":  true,
     "documentation":  "https://github.com/jocelynlopez/baillconnect-ha",
     "issue_tracker":  "https://github.com/jocelynlopez/baillconnect-ha/issues",
