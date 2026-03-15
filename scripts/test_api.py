@@ -165,8 +165,10 @@ async def main():
 
     print(f"Testing with account: {EMAIL}")
 
+    # Use ThreadedResolver to avoid aiodns version issues on Windows
+    connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
     jar = aiohttp.CookieJar()
-    async with aiohttp.ClientSession(cookie_jar=jar) as session:
+    async with aiohttp.ClientSession(cookie_jar=jar, connector=connector) as session:
 
         # Step 1: CSRF from homepage
         csrf = await step_fetch_homepage(session)
