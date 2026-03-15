@@ -25,3 +25,6 @@ htmlcov/
 .venv/
 venv/
 env/
+
+# Claude Code session data
+.claude/
