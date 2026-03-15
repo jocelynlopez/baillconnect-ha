@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -172,6 +173,7 @@ class BaillConnectClient:
         self._external_session = session is not None
         self._session: aiohttp.ClientSession | None = session
         self._csrf_token: str | None = None
+        self._discovered_regulation_id: int | None = None
 
     # ------------------------------------------------------------------
     # Session management
@@ -189,37 +191,8 @@ class BaillConnectClient:
             await self._session.close()
 
     # ------------------------------------------------------------------
-    # CSRF helpers
+    # API helpers
     # ------------------------------------------------------------------
-
-    async def _fetch_csrf_token(self) -> str:
-        """Fetch CSRF token from the homepage (GET /)."""
-        session = self._ensure_session()
-        try:
-            async with session.get(
-                BASE_URL,
-                allow_redirects=True,
-                timeout=REQUEST_TIMEOUT,
-                headers=BROWSER_HEADERS,
-            ) as resp:
-                _LOGGER.debug("GET %s -> HTTP %s", BASE_URL, resp.status)
-                if resp.status != 200:
-                    raise BaillConnectConnectionError(
-                        f"Homepage returned HTTP {resp.status}"
-                    )
-                html = await resp.text()
-        except aiohttp.ClientError as exc:
-            raise BaillConnectConnectionError(f"Network error: {exc}") from exc
-
-        soup = BeautifulSoup(html, "html.parser")
-        meta = soup.find("meta", attrs={"name": "csrf-token"})
-        if not meta or not meta.get("content"):
-            raise BaillConnectConnectionError(
-                "CSRF token not found in page meta tags"
-            )
-        token = str(meta["content"])
-        _LOGGER.debug("CSRF token fetched (len=%d)", len(token))
-        return token
 
     def _api_headers(self) -> dict[str, str]:
         headers = {
@@ -243,10 +216,37 @@ class BaillConnectClient:
         """
         session = self._ensure_session()
 
-        # 1. Get CSRF token
-        self._csrf_token = await self._fetch_csrf_token()
+        # 1. GET /client/connexion to fetch the CSRF token from the login form
+        try:
+            async with session.get(
+                LOGIN_URL,
+                allow_redirects=True,
+                timeout=REQUEST_TIMEOUT,
+                headers=BROWSER_HEADERS,
+            ) as resp:
+                _LOGGER.debug("GET %s -> HTTP %s", LOGIN_URL, resp.status)
+                if resp.status != 200:
+                    raise BaillConnectConnectionError(
+                        f"Login page returned HTTP {resp.status}"
+                    )
+                html = await resp.text()
+        except aiohttp.ClientError as exc:
+            raise BaillConnectConnectionError(f"Network error: {exc}") from exc
 
-        # 2. POST login
+        soup = BeautifulSoup(html, "html.parser")
+        # Try hidden _token input first (most reliable), then meta tag
+        token_input = soup.find("input", attrs={"name": "_token"})
+        if token_input and token_input.get("value"):
+            self._csrf_token = str(token_input["value"])
+        else:
+            meta = soup.find("meta", attrs={"name": "csrf-token"})
+            if meta and meta.get("content"):
+                self._csrf_token = str(meta["content"])
+        if not self._csrf_token:
+            raise BaillConnectConnectionError("CSRF token not found on login page")
+        _LOGGER.debug("CSRF token fetched (len=%d)", len(self._csrf_token))
+
+        # 2. POST credentials
         payload = {
             "email": self._email,
             "password": self._password,
@@ -270,12 +270,9 @@ class BaillConnectClient:
                     resp.status,
                     resp.headers.get("Location", "-"),
                 )
-                # 302/303 = redirect after successful login (standard Laravel behaviour)
-                # 200 = login page re-rendered (credentials wrong or CSRF mismatch)
                 if resp.status in (401, 403):
                     raise BaillConnectAuthError("Invalid credentials")
                 if resp.status == 200:
-                    # Server returned the login form again → bad credentials
                     raise BaillConnectAuthError(
                         "Login returned 200 (credentials rejected or CSRF mismatch)"
                     )
@@ -283,13 +280,22 @@ class BaillConnectClient:
                     raise BaillConnectConnectionError(
                         f"Unexpected login response HTTP {resp.status}"
                     )
-                # Successful redirect — follow it once to grab a fresh CSRF token
-                location = resp.headers.get("Location")
+                location = resp.headers.get("Location", "")
 
         except aiohttp.ClientError as exc:
             raise BaillConnectConnectionError(f"Network error during login: {exc}") from exc
 
-        # Follow the redirect manually to refresh the CSRF token for API calls
+        # Extract regulation ID from redirect URL (e.g. /client/regulations/2153)
+        if location:
+            m = re.search(r"/regulations/(\d+)", location)
+            if m:
+                self._discovered_regulation_id = int(m.group(1))
+                _LOGGER.debug(
+                    "Regulation ID discovered from login redirect: %d",
+                    self._discovered_regulation_id,
+                )
+
+        # Follow the redirect to refresh the CSRF token for API calls
         if location:
             redirect_url = location if location.startswith("http") else f"{BASE_URL}{location}"
             try:
@@ -297,16 +303,17 @@ class BaillConnectClient:
                     redirect_url,
                     allow_redirects=True,
                     timeout=REQUEST_TIMEOUT,
+                    headers=BROWSER_HEADERS,
                 ) as resp2:
                     if resp2.status == 200:
-                        html = await resp2.text()
-                        soup = BeautifulSoup(html, "html.parser")
-                        meta = soup.find("meta", attrs={"name": "csrf-token"})
-                        if meta and meta.get("content"):
-                            self._csrf_token = str(meta["content"])
+                        html2 = await resp2.text()
+                        soup2 = BeautifulSoup(html2, "html.parser")
+                        meta2 = soup2.find("meta", attrs={"name": "csrf-token"})
+                        if meta2 and meta2.get("content"):
+                            self._csrf_token = str(meta2["content"])
                             _LOGGER.debug("CSRF token refreshed after login")
             except aiohttp.ClientError:
-                pass  # Non-fatal — CSRF token from initial fetch is still valid
+                pass  # Non-fatal
 
         _LOGGER.info("BaillConnect login successful for %s", self._email)
         return True
@@ -378,8 +385,10 @@ class BaillConnectClient:
                         raise BaillConnectConnectionError(
                             f"API returned HTTP {resp.status}"
                         )
-                    data = await resp.json()
-                    return RegulationState.from_dict(data)
+                    raw = await resp.json()
+                    # API wraps response in {"data": {...}}
+                    inner = raw.get("data", raw)
+                    return RegulationState.from_dict(inner)
 
             except aiohttp.ClientError as exc:
                 raise BaillConnectConnectionError(
@@ -394,51 +403,51 @@ class BaillConnectClient:
     # ------------------------------------------------------------------
 
     async def discover_regulation_id(self) -> int | None:
-        """After login, try to find the regulation ID from the dashboard page."""
+        """After login, try to find the regulation ID.
+
+        Primary strategy: the login redirect URL contains /client/regulations/{id},
+        captured during login() and stored in self._discovered_regulation_id.
+
+        Fallback: navigate to /client/espaces or parse the authenticated page.
+        """
+        # Fast path: captured from login redirect
+        if self._discovered_regulation_id:
+            return self._discovered_regulation_id
+
+        # Fallback: navigate to the authenticated regulations page
         session = self._ensure_session()
-        try:
-            async with session.get(
-                f"{BASE_URL}/dashboard",
-                headers={HEADER_XHR: HEADER_XHR_VALUE},
-                allow_redirects=True,
-            ) as resp:
-                if resp.status != 200:
-                    _LOGGER.warning(
-                        "Dashboard returned HTTP %s during discovery", resp.status
-                    )
-                    return None
-                html = await resp.text()
-        except aiohttp.ClientError as exc:
-            _LOGGER.error("Network error during regulation discovery: %s", exc)
-            return None
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Strategy 1: data-regulation-id attribute anywhere in the page
-        el = soup.find(attrs={"data-regulation-id": True})
-        if el:
+        for path in ("/client/espaces", "/client/regulations"):
             try:
-                return int(el["data-regulation-id"])
-            except (ValueError, KeyError):
-                pass
+                async with session.get(
+                    f"{BASE_URL}{path}",
+                    headers=BROWSER_HEADERS,
+                    allow_redirects=True,
+                ) as resp:
+                    if resp.status != 200:
+                        continue
+                    # Check final URL for regulation ID
+                    final_url = str(resp.url)
+                    m = re.search(r"/regulations/(\d+)", final_url)
+                    if m:
+                        reg_id = int(m.group(1))
+                        self._discovered_regulation_id = reg_id
+                        return reg_id
+                    # Check page HTML
+                    html = await resp.text()
+            except aiohttp.ClientError:
+                continue
 
-        # Strategy 2: look for /api-client/regulations/{id} in script tags
-        import re
-        for script in soup.find_all("script"):
-            text = script.get_text()
-            match = re.search(r"/api-client/regulations/(\d+)", text)
-            if match:
-                return int(match.group(1))
+            for pattern in (
+                r"/client/regulations/(\d+)",
+                r"/api-client/regulations/(\d+)",
+                r"regulationId[\"']?\s*[:=]\s*(\d+)",
+                r"regulation_id[\"']?\s*[:=]\s*(\d+)",
+            ):
+                m = re.search(pattern, html)
+                if m:
+                    reg_id = int(m.group(1))
+                    self._discovered_regulation_id = reg_id
+                    return reg_id
 
-        # Strategy 3: look for regulationId or regulation_id in inline JS
-        full_text = html
-        for pattern in (
-            r"regulationId[\"']?\s*[:=]\s*(\d+)",
-            r"regulation_id[\"']?\s*[:=]\s*(\d+)",
-        ):
-            match = re.search(pattern, full_text)
-            if match:
-                return int(match.group(1))
-
-        _LOGGER.warning("Could not auto-discover regulation ID from dashboard")
+        _LOGGER.warning("Could not auto-discover regulation ID")
         return None

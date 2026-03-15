@@ -7,7 +7,7 @@ MODEL = "IDC-WEB BAILLCONNECT"
 
 # API
 BASE_URL = "https://www.baillconnect.com"
-LOGIN_URL = f"{BASE_URL}/login"
+LOGIN_URL = f"{BASE_URL}/client/connexion"
 API_URL = f"{BASE_URL}/api-client/regulations"
 
 # HTTP headers
